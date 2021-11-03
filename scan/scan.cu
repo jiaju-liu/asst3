@@ -30,29 +30,30 @@ static inline int nextPow2(int n) {
 
 __global__ void
 scanUp(int *input, int rounded, int N, int i) {
-    printf("Hello from block %d, thread %d\n", blockIdx.x, threadIdx.x);
     int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
     if (endInd < N) {
         input[endInd] += input[index+twod-1];
+        if (endInd == N-1) {
+            input[endInd] = 0;
+        }
     }
 }
 
 __global__ void
 scanDown(int *input, int rounded, int N, int i) {
-    printf("Hello from block %d, thread %d\n", blockIdx.x, threadIdx.x);
     int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
     if (endInd < N) {
-        int t = input[i+twod-1];
-        input[i+twod-1] = input[endInd];
+        int t = input[index+twod-1];
+        input[index+twod-1] = input[endInd];
         input[endInd] += t;
     }
-}   
+}
 // exclusive_scan --
 //
 // Implementation of an exclusive scan on global memory array `input`,
@@ -81,13 +82,13 @@ void exclusive_scan(int* input, int N, int* result)
     // scan.
     int rounded = nextPow2(N);
     for (int i = 0; i < log2(rounded); i++) {
-        scanUp<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(input, rounded, N, i);
+        scanUp<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, N, i);
     }
-
-    input[0] = 0;
+    cudaDeviceSynchronize();
     for (int i = log2(rounded)-1; i >= 0; i--) {
-        scanDown<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(input, rounded, N, i);
+        scanDown<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, N, i);
     }
+    // result = input;
 }
 
 
@@ -115,8 +116,8 @@ double cudaScan(int* inarray, int* end, int* resultarray)
 
     int rounded_length = nextPow2(end - inarray);
     
-    cudaMalloc((void **)&device_result, sizeof(int) * rounded_length);
-    cudaMalloc((void **)&device_input, sizeof(int) * rounded_length);
+    cudaMalloc(&device_result, sizeof(int) * rounded_length);
+    cudaMalloc(&device_input, sizeof(int) * rounded_length);
 
     // For convenience, both the input and output vectors on the
     // device are initialized to the input values. This means that
