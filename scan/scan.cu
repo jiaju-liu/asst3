@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -27,6 +28,31 @@ static inline int nextPow2(int n) {
     return n;
 }
 
+__global__ void
+scanUp(int *input, int rounded, int N, int i) {
+    printf("Hello from block %d, thread %d\n", blockIdx.x, threadIdx.x);
+    int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
+    int twod = 1 << i;
+    int twodp1 = 1 << (i+1);
+    int endInd = index+twodp1-1;
+    if (endInd < N) {
+        input[endInd] += input[index+twod-1];
+    }
+}
+
+__global__ void
+scanDown(int *input, int rounded, int N, int i) {
+    printf("Hello from block %d, thread %d\n", blockIdx.x, threadIdx.x);
+    int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
+    int twod = 1 << i;
+    int twodp1 = 1 << (i+1);
+    int endInd = index+twodp1-1;
+    if (endInd < N) {
+        int t = input[i+twod-1];
+        input[i+twod-1] = input[endInd];
+        input[endInd] += t;
+    }
+}   
 // exclusive_scan --
 //
 // Implementation of an exclusive scan on global memory array `input`,
@@ -53,8 +79,15 @@ void exclusive_scan(int* input, int N, int* result)
     // on the CPU.  Your implementation will need to make multiple calls
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
+    int rounded = nextPow2(N);
+    for (int i = 0; i < log2(rounded); i++) {
+        scanUp<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(input, rounded, N, i);
+    }
 
-
+    input[0] = 0;
+    for (int i = log2(rounded)-1; i >= 0; i--) {
+        scanDown<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(input, rounded, N, i);
+    }
 }
 
 
