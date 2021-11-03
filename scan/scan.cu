@@ -29,26 +29,26 @@ static inline int nextPow2(int n) {
 }
 
 __global__ void
-scanUp(int *input, int rounded, int N, int i) {
+scanUp(int *input, int rounded, int log2_rounded, int i) {
     int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
-    if (endInd < N) {
+    if (blockIdx.x * blockDim.x + threadIdx.x <= 1 << (log2_rounded - i - 1)) {
         input[endInd] += input[index+twod-1];
-        if (endInd == N-1) {
+        if (endInd == rounded-1) {
             input[endInd] = 0;
         }
     }
 }
 
 __global__ void
-scanDown(int *input, int rounded, int N, int i) {
+scanDown(int *input, int rounded, int log2_rounded, int i) {
     int index = (blockIdx.x * blockDim.x + threadIdx.x) << (i+1);
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
-    if (endInd < N) {
+    if (blockIdx.x * blockDim.x + threadIdx.x <= 1 << (log2_rounded - i - 1)) {
         int t = input[index+twod-1];
         input[index+twod-1] = input[endInd];
         input[endInd] += t;
@@ -82,11 +82,11 @@ void exclusive_scan(int* input, int N, int* result)
     // scan.
     int rounded = nextPow2(N);
     for (int i = 0; i < log2(rounded); i++) {
-        scanUp<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, N, i);
+        scanUp<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, log2(rounded), i);
     }
     cudaDeviceSynchronize();
     for (int i = log2(rounded)-1; i >= 0; i--) {
-        scanDown<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, N, i);
+        scanDown<<<((rounded >> (i+1))+THREADS_PER_BLOCK-1)/THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(result, rounded, log2(rounded), i);
     }
     // result = input;
 }
@@ -103,7 +103,12 @@ double cudaScan(int* inarray, int* end, int* resultarray)
 {
     int* device_result;
     int* device_input;
-    int N = end - inarray;  
+    int N = end - inarray;
+
+    // for (int i = 0; i < N; i++) {
+    //     printf("%d ", inarray[i]);
+    // } 
+    // printf("\n");
 
     // This code rounds the arrays provided to exclusive_scan up
     // to a power of 2, but elements after the end of the original
@@ -136,6 +141,11 @@ double cudaScan(int* inarray, int* end, int* resultarray)
     double endTime = CycleTimer::currentSeconds();
        
     cudaMemcpy(resultarray, device_result, (end - inarray) * sizeof(int), cudaMemcpyDeviceToHost);
+    
+    // for (int i = 0; i < N; i++) {
+    //     printf("%d ", resultarray[i]);
+    // } 
+    // printf("\n");
 
     double overallDuration = endTime - startTime;
     return overallDuration; 

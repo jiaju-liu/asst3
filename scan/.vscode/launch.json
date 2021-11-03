@@ -4,8 +4,8 @@
             "name": "CUDA C++: Launch",
             "type": "cuda-gdb",
             "request": "launch",
-            "program": "${workspaceFolder}/render",
-            "args": "rgb"
+            "program": "${workspaceFolder}/cudaScan",
+            "args": "-n 2049 rgb"
         }
         ]
     }
