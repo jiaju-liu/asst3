@@ -5,7 +5,8 @@
             "type": "cuda-gdb",
             "request": "launch",
             "program": "${workspaceFolder}/cudaScan",
-            "args": "-n 2049 rgb"
+            "args": "-n 20000000 rgb",
+    "preLaunchTask": "debug",
         }
         ]
     }

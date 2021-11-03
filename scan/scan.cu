@@ -34,7 +34,7 @@ scanUp(int *input, int rounded, int log2_rounded, int i) {
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
-    if (blockIdx.x * blockDim.x + threadIdx.x <= 1 << (log2_rounded - i - 1)) {
+    if (blockIdx.x * blockDim.x + threadIdx.x < 1 << (log2_rounded - i - 1)) {
         input[endInd] += input[index+twod-1];
         if (endInd == rounded-1) {
             input[endInd] = 0;
@@ -48,7 +48,7 @@ scanDown(int *input, int rounded, int log2_rounded, int i) {
     int twod = 1 << i;
     int twodp1 = 1 << (i+1);
     int endInd = index+twodp1-1;
-    if (blockIdx.x * blockDim.x + threadIdx.x <= 1 << (log2_rounded - i - 1)) {
+    if (blockIdx.x * blockDim.x + threadIdx.x < 1 << (log2_rounded - i - 1)) {
         int t = input[index+twod-1];
         input[index+twod-1] = input[endInd];
         input[endInd] += t;
