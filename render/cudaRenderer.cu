@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <vector>
+#include <cstring>
 
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -13,6 +14,25 @@
 #include "noise.h"
 #include "sceneLoader.h"
 #include "util.h"
+
+
+
+#define DEBUG
+
+#ifdef DEBUG
+#define cudaCheckError(ans) { cudaAssert((ans), __FILE__, __LINE__); }
+inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr, "CUDA Error: %s at %s:%d\n", 
+        cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+#else
+#define cudaCheckError(ans) ans
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////
 // Putting all the cuda kernels here
@@ -27,6 +47,7 @@ struct GlobalConstants {
     float* velocity;
     float* color;
     float* radius;
+    // int* status;
 
     int imageWidth;
     int imageHeight;
@@ -379,14 +400,38 @@ shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
     // END SHOULD-BE-ATOMIC REGION
 }
 
+__global__ void
+cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invHeight,short imageWidth, short imageHeight) {
+    int screenMinX = cudaDeviceBoxes[circleIndex * 4];
+    int screenMaxX = cudaDeviceBoxes[circleIndex * 4 + 1];
+    int screenMinY = cudaDeviceBoxes[circleIndex * 4 + 2];
+    int screenMaxY = cudaDeviceBoxes[circleIndex * 4 + 3];
+    int index_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int index_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (index_x + screenMinX >= screenMaxX)
+        return;
+    if (index_y + screenMinY >= screenMaxY)
+        return;
+
+    float2 pixelCenter;
+    pixelCenter = make_float2(invWidth * (static_cast<float>(screenMinX+index_x) + 0.5f),
+                            invHeight * (static_cast<float>(screenMinY+index_y) + 0.5f));
+    float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * ((screenMinY+index_y)* imageWidth + screenMinX+index_x)]);
+    float3 p = *(float3*)(&cuConstRendererParams.position[circleIndex * 3]);
+    shadePixel(circleIndex, pixelCenter, p, imgPtr);
+}
+
 // kernelRenderCircles -- (CUDA device code)
 //
 // Each thread renders a circle.  Since there is no protection to
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
-__global__ void kernelRenderCircles() {
+__global__ void kernelRenderCircles(int* cudaDeviceStatus, int i, short* cudaDeviceBoxes) {
 
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    // __shared__ int current_cir[cuConstRendererParams.numCircles];
+    // int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int index = i;
 
     if (index >= cuConstRendererParams.numCircles)
         return;
@@ -412,19 +457,30 @@ __global__ void kernelRenderCircles() {
     short screenMinY = (minY > 0) ? ((minY < imageHeight) ? minY : imageHeight) : 0;
     short screenMaxY = (maxY > 0) ? ((maxY < imageHeight) ? maxY : imageHeight) : 0;
 
-    float invWidth = 1.f / imageWidth;
-    float invHeight = 1.f / imageHeight;
+    cudaDeviceBoxes[index * 4] = screenMinX;
+    cudaDeviceBoxes[index * 4 + 1] = screenMaxX;
+    cudaDeviceBoxes[index * 4 + 2] = screenMinY;
+    cudaDeviceBoxes[index * 4 + 3] = screenMaxY;
 
-    // for all pixels in the bonding box
-    for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
-        float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
-        for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
-            float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
-                                                 invHeight * (static_cast<float>(pixelY) + 0.5f));
-            shadePixel(index, pixelCenterNorm, p, imgPtr);
-            imgPtr++;
-        }
-    }
+    // float invWidth = 1.f / imageWidth;
+    // float invHeight = 1.f / imageHeight;
+
+    // // for all pixels in the bonding box
+    // dim3 blockDim(16, 16);
+    // dim3 gridDim((screenMaxX - screenMinX + blockDim.x - 1) / blockDim.x, screenMaxY - screenMinY + blockDim.y - 1 / blockDim.y);
+
+    // cudaShadePixel<<<gridDim, blockDim>>>(index, screenMinY, screenMaxY, screenMinX, screenMaxX, invWidth, invHeight, imageWidth, imageHeight);
+
+    // for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
+    //     float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
+    //     for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
+    //         float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
+    //                                              invHeight * (static_cast<float>(pixelY) + 0.5f));
+    //         shadePixel(index, pixelCenterNorm, p, imgPtr);
+    //         imgPtr++;
+    //     }
+    // }
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -457,6 +513,7 @@ CudaRenderer::~CudaRenderer() {
         delete [] velocity;
         delete [] color;
         delete [] radius;
+        delete [] status;
     }
 
     if (cudaDevicePosition) {
@@ -465,6 +522,7 @@ CudaRenderer::~CudaRenderer() {
         cudaFree(cudaDeviceColor);
         cudaFree(cudaDeviceRadius);
         cudaFree(cudaDeviceImageData);
+        cudaFree(cudaDeviceStatus);
     }
 }
 
@@ -520,16 +578,23 @@ CudaRenderer::setup() {
     // See the CUDA Programmer's Guide for descriptions of
     // cudaMalloc and cudaMemcpy
 
+    status = new int[numCircles];
+    std::memset(status, 0, sizeof(int) * numCircles);
+    status[0] = 1;
+
     cudaMalloc(&cudaDevicePosition, sizeof(float) * 3 * numCircles);
     cudaMalloc(&cudaDeviceVelocity, sizeof(float) * 3 * numCircles);
     cudaMalloc(&cudaDeviceColor, sizeof(float) * 3 * numCircles);
     cudaMalloc(&cudaDeviceRadius, sizeof(float) * numCircles);
     cudaMalloc(&cudaDeviceImageData, sizeof(float) * 4 * image->width * image->height);
+    cudaCheckError(cudaMalloc(&cudaDeviceStatus, sizeof(int) * numCircles));
+    cudaCheckError(cudaMalloc(&cudaDeviceBoxes, sizeof(short) * 4 * numCircles));
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceColor, color, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceRadius, radius, sizeof(float) * numCircles, cudaMemcpyHostToDevice);
+    cudaMemcpy(cudaDeviceStatus, status, sizeof(int) * numCircles, cudaMemcpyHostToDevice);
 
     // Initialize parameters in constant memory.  We didn't talk about
     // constant memory in class, but the use of read-only constant
@@ -549,6 +614,10 @@ CudaRenderer::setup() {
     params.color = cudaDeviceColor;
     params.radius = cudaDeviceRadius;
     params.imageData = cudaDeviceImageData;
+    // params.status = cudaDeviceStatus;
+    width = image->width;
+    height = image->height;
+    printf("width %d, height %d \n", width, height);
 
     cudaMemcpyToSymbol(cuConstRendererParams, &params, sizeof(GlobalConstants));
 
@@ -640,6 +709,31 @@ CudaRenderer::render() {
     dim3 blockDim(256, 1);
     dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
 
-    kernelRenderCircles<<<gridDim, blockDim>>>();
-    cudaDeviceSynchronize();
+    // kernelRenderCircles<<<gridDim, blockDim>>>(cudaDeviceStatus);
+    // cudaCheckError( cudaDeviceSynchronize() );
+
+    for (int i =0; i < numCircles; i++) {
+        kernelRenderCircles<<<1, 1>>>(cudaDeviceStatus, i, cudaDeviceBoxes);
+        cudaCheckError(cudaDeviceSynchronize());
+    }
+
+    float invWidth = 1.f / width;
+    float invHeight = 1.f / height;
+    boxes = new short[4 * numCircles];
+
+    cudaMemcpy(boxes, cudaDeviceBoxes, sizeof(short) * 4 * numCircles, cudaMemcpyDeviceToHost);
+
+
+    for (int i =0; i < numCircles; i++) {
+        dim3 blockDim2(16, 16);
+        int circleIndex = i;
+        int screenMinY = boxes[circleIndex * 4];
+        int screenMaxY = boxes[circleIndex * 4 + 1];
+        int screenMinX = boxes[circleIndex * 4 + 2];
+        int screenMaxX = boxes[circleIndex * 4 + 3];
+        dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
+        cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height);
+        cudaCheckError(cudaDeviceSynchronize());
+    }
+
 }

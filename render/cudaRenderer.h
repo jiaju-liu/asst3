@@ -20,12 +20,18 @@ private:
     float* velocity;
     float* color;
     float* radius;
+    int* status;
+    int width;
+    int height;
+    short* boxes;
 
     float* cudaDevicePosition;
     float* cudaDeviceVelocity;
     float* cudaDeviceColor;
     float* cudaDeviceRadius;
     float* cudaDeviceImageData;
+    int* cudaDeviceStatus;
+    short* cudaDeviceBoxes;
 
 public:
 
