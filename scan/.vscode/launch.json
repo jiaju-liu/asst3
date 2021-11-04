@@ -5,8 +5,8 @@
             "type": "cuda-gdb",
             "request": "launch",
             "program": "${workspaceFolder}/cudaScan",
-            "args": "-n 20000000 rgb",
-    "preLaunchTask": "debug",
+            "args": "-m find_repeats rgb",
+    // "preLaunchTask": "debug",
         }
         ]
     }

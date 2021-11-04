@@ -184,6 +184,27 @@ double cudaScanThrust(int* inarray, int* end, int* resultarray) {
     return overallDuration; 
 }
 
+__global__ void
+generate_logits(int* input, int length, int* output) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (input[index] == input[index + 1]) {
+        output[index] = 1;
+    } else {
+        output[index] = 0;
+    }
+}
+
+__global__ void
+scatter(int* input, int length, int* output, int rounded) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (input[index] != input[index + 1]) {
+        output[input[index]] = index;
+    }
+    if (index == length-2) {
+        output[rounded - 1] = input[index + 1];
+    }
+}
+
 
 // find_repeats --
 //
@@ -204,8 +225,16 @@ int find_repeats(int* device_input, int length, int* device_output) {
     // exclusive_scan function with them. However, your implementation
     // must ensure that the results of find_repeats are correct given
     // the actual array length.
-
-    return 0; 
+    int rounded = nextPow2(length);
+    generate_logits<<<(length-1+THREADS_PER_BLOCK-1) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(device_input, length, device_input);
+    cudaDeviceSynchronize();
+    exclusive_scan(device_input, length, device_input);
+    cudaDeviceSynchronize();
+    scatter<<<(length-1+THREADS_PER_BLOCK-1) / THREADS_PER_BLOCK, THREADS_PER_BLOCK>>>(device_input, length, device_output, rounded);
+    cudaDeviceSynchronize();
+    int repeat_num;
+    cudaMemcpy((void *)&repeat_num, (void *)&device_output[rounded - 1], sizeof(int), cudaMemcpyDeviceToHost);
+    return repeat_num;
 }
 
 
