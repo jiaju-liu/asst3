@@ -733,8 +733,15 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
     short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
     cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
+    // num circles must be drawn 88before drawing this (-1 = already drawn)
+    cudaDeviceStatusMat[i*numCircles] += overlapped;
 }
 
+update_deps {
+    does the vector sums
+    memcopies into a new matrix to do scan
+    puts indices of to be drawn into some vector
+}
 void
 CudaRenderer::render() {
 
@@ -752,9 +759,11 @@ CudaRenderer::render() {
     cudaCheckError(cudaDeviceSynchronize());
 
     for (int i =0; i < numCircles; i++) {
+        // parallelized 
         kernelRenderCircles<<<1, 1>>>(cudaDeviceStatus, i, cudaDeviceBoxes);
-        cudaCheckError(cudaDeviceSynchronize());
+        //
     }
+    cudaCheckError(cudaDeviceSynchronize());
 
     float invWidth = 1.f / width;
     float invHeight = 1.f / height;
@@ -767,19 +776,36 @@ CudaRenderer::render() {
     for (int i =0; i < numCircles; i++) {
         if (i == 0) continue; // circle 0 doesn't have any dependencies
         checkOverlap<<<(i+blockDim.x-1) / blockDim.x, blockDim>>>(cudaDeviceStatusMat, i, cudaDeviceBoxes, cudaDevicePosition, cudaDeviceRadius, numCircles, invWidth, invHeight);
+        // add prefix sum
     }
     cudaCheckError(cudaDeviceSynchronize());
 
 
-    for (int i =0; i < numCircles; i++) {
-        dim3 blockDim2(16, 16);
-        int circleIndex = i;
-        int screenMinX = boxes[circleIndex * 4];
-        int screenMaxX = boxes[circleIndex * 4 + 1];
-        int screenMinY = boxes[circleIndex * 4 + 2];
-        int screenMaxY = boxes[circleIndex * 4 + 3];
-        dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
-        cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
+    //while (not all circles drawn) {
+        //iterate once
+        // update num circ
+    //}
+    int needtoShade = numCircles;
+    while (needtoShade) {
+        // here do one iteration
+        // cudasync
+        // update deps
+        for (int i =0; i < numCircles; i++) {
+            // see if it's available
+            // change code
+            // add a drawn vector
+            if (!cudaDeviceStatusMat[i*numCircles]) {
+                dim3 blockDim2(16, 16);
+                int circleIndex = i;
+                int screenMinX = boxes[circleIndex * 4];
+                int screenMaxX = boxes[circleIndex * 4 + 1];
+                int screenMinY = boxes[circleIndex * 4 + 2];
+                int screenMaxY = boxes[circleIndex * 4 + 3];
+                dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
+                cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
+                // update deps
+            }
+        }
         cudaCheckError(cudaDeviceSynchronize());
     }
 
