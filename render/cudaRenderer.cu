@@ -15,6 +15,8 @@
 #include "sceneLoader.h"
 #include "util.h"
 
+#include "circleBoxTest.cu_inl"
+
 
 
 #define DEBUG
@@ -401,7 +403,7 @@ shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
 }
 
 __global__ void
-cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invHeight,short imageWidth, short imageHeight) {
+cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invHeight,short imageWidth, short imageHeight, short* cudaDeviceStatusMat) {
     int screenMinX = cudaDeviceBoxes[circleIndex * 4];
     int screenMaxX = cudaDeviceBoxes[circleIndex * 4 + 1];
     int screenMinY = cudaDeviceBoxes[circleIndex * 4 + 2];
@@ -428,7 +430,6 @@ cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invH
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
 __global__ void kernelRenderCircles(int* cudaDeviceStatus, int i, short* cudaDeviceBoxes) {
-
     // __shared__ int current_cir[cuConstRendererParams.numCircles];
     // int index = blockIdx.x * blockDim.x + threadIdx.x;
     int index = i;
@@ -589,6 +590,7 @@ CudaRenderer::setup() {
     cudaMalloc(&cudaDeviceImageData, sizeof(float) * 4 * image->width * image->height);
     cudaCheckError(cudaMalloc(&cudaDeviceStatus, sizeof(int) * numCircles));
     cudaCheckError(cudaMalloc(&cudaDeviceBoxes, sizeof(short) * 4 * numCircles));
+    cudaCheckError(cudaMalloc(&cudaDeviceStatusMat, sizeof(short) * numCircles * numCircles));
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
@@ -702,6 +704,37 @@ CudaRenderer::advanceAnimation() {
     cudaDeviceSynchronize();
 }
 
+
+__global__ void
+clearStatusMat(short* cudaDeviceStatusMat, int numCircles) {
+    int index_x = blockIdx.x * blockDim.x + threadIdx.x;
+    int index_y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (index_x >= numCircles)
+        return;
+    if (index_y > numCircles)
+        return;
+
+    cudaDeviceStatusMat[index_x * numCircles + index_y] = 0;
+}
+
+__global__ void
+checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= i)
+        return;
+    // printf("index: %d, i: %d\n", index, i);
+    float circleX = cudaDevicePosition[i*3];
+    float circleY = cudaDevicePosition[i*3+1];
+    float circleRadius = cudaDeviceRadius[i];
+    float boxL = invWidth * cudaDeviceBoxes[index*4];
+    float boxR = invWidth * cudaDeviceBoxes[index*4+1];
+    float boxB = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
+    float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
+    short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
+    cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
+}
+
 void
 CudaRenderer::render() {
 
@@ -711,6 +744,12 @@ CudaRenderer::render() {
 
     // kernelRenderCircles<<<gridDim, blockDim>>>(cudaDeviceStatus);
     // cudaCheckError( cudaDeviceSynchronize() );
+
+    dim3 blockDim2d(16, 16);
+    dim3 gridDim2d((numCircles + blockDim2d.x - 1) / blockDim2d.x, (numCircles + blockDim2d.y - 1) / blockDim2d.y );
+
+    clearStatusMat<<<gridDim2d, blockDim2d>>>(cudaDeviceStatusMat, numCircles);
+    cudaCheckError(cudaDeviceSynchronize());
 
     for (int i =0; i < numCircles; i++) {
         kernelRenderCircles<<<1, 1>>>(cudaDeviceStatus, i, cudaDeviceBoxes);
@@ -723,16 +762,24 @@ CudaRenderer::render() {
 
     cudaMemcpy(boxes, cudaDeviceBoxes, sizeof(short) * 4 * numCircles, cudaMemcpyDeviceToHost);
 
+    // bulk launch N-1 times, with length (1, 2, ..., N-1) number of threads 
+    // instead can just 2d  bulk launch N-1 by N-1 number of threads
+    for (int i =0; i < numCircles; i++) {
+        if (i == 0) continue; // circle 0 doesn't have any dependencies
+        checkOverlap<<<(i+blockDim.x-1) / blockDim.x, blockDim>>>(cudaDeviceStatusMat, i, cudaDeviceBoxes, cudaDevicePosition, cudaDeviceRadius, numCircles, invWidth, invHeight);
+    }
+    cudaCheckError(cudaDeviceSynchronize());
+
 
     for (int i =0; i < numCircles; i++) {
         dim3 blockDim2(16, 16);
         int circleIndex = i;
-        int screenMinY = boxes[circleIndex * 4];
-        int screenMaxY = boxes[circleIndex * 4 + 1];
-        int screenMinX = boxes[circleIndex * 4 + 2];
-        int screenMaxX = boxes[circleIndex * 4 + 3];
+        int screenMinX = boxes[circleIndex * 4];
+        int screenMaxX = boxes[circleIndex * 4 + 1];
+        int screenMinY = boxes[circleIndex * 4 + 2];
+        int screenMaxY = boxes[circleIndex * 4 + 3];
         dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
-        cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height);
+        cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
         cudaCheckError(cudaDeviceSynchronize());
     }
 

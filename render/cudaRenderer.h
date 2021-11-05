@@ -32,6 +32,7 @@ private:
     float* cudaDeviceImageData;
     int* cudaDeviceStatus;
     short* cudaDeviceBoxes;
+    short* cudaDeviceStatusMat;
 
 public:
 
