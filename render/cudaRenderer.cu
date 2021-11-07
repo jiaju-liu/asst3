@@ -796,7 +796,9 @@ CudaRenderer::render() {
         // here do one iteration by rendering every circle we can i.e.
         // cudaMemcpy(updates, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
         // renderCircles<<<updates[1], someBlocksize>>> renderCircles
-        // where each block will take one circle. this makes it easier to delegate work
+        // where each block will take one circle. this makes it easier to
+        // delegate work and we can basically reuse the original
+        // kernelRenderCircles code
         cudaCheckError(cudaDeviceSynchronize());
         // update deps
 
