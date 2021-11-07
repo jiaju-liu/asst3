@@ -778,24 +778,33 @@ CudaRenderer::render() {
     }
     cudaCheckError(cudaDeviceSynchronize());
 
-
-    //while (not all circles drawn) {
-        //iterate once
-        // update num circ
-    //}
     // cudaUpdateList[0] is the number of nodes left to render and
     // cudaUpdateList[1] is the number of nodes we need to update (so length of
     // the rest of the vector)
     cudaMalloc(&cudaUpdateList, (numCircles + 2) * sizeof(int));
     
-    int updates[2] = {numCircles, 0};
-    cudaMemcpy(cudaUpdateList, updates, 2 * sizeof(int), cudaMemcpyHostToDevice);
+    int updateList[2 + numCircles];
+    updateList[0] = numCircles;
+    updateList[1] = 0;
+    // initialize vals
+    cudaMemcpy(cudaUpdateList, updateList, 2 * sizeof(int), cudaMemcpyHostToDevice);
 
     // do an inital updatedeps to populate cudaUpdateList? or throw it in checkoverlap
-    while (updates[0]) {
+
+    // memcpy once to get array size
+    cudaMemcpy(updateList, cudaUpdateList, 2 * sizeof(int), cudaMemcpyDeviceToHost);
+    // memcpy rest of it
+    cudaMemcpy(updateList+2, cudaUpdateList+2, updateList[1] * sizeof(int), cudaMemcpyDeviceToHost);
+
+    while (updateList[0]) {
         // here do one iteration by rendering every circle we can i.e.
-        // cudaMemcpy(updates, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
-        // renderCircles<<<updates[1], someBlocksize>>> renderCircles
+        cudaMemcpy(updates, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
+        for (int i = 0; i < updateList[1]; i++) {
+            int circNum = updateList[2+i];
+            // bound boxes already clamped
+            gridDim = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
+            renderCircles<<<gridDim, blockDim>>>(cudaDeviceBoxes, i);
+        }
         // where each block will take one circle. this makes it easier to
         // delegate work and we can basically reuse the original
         // kernelRenderCircles code
