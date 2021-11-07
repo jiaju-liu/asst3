@@ -429,6 +429,9 @@ cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invH
 // Each thread renders a circle.  Since there is no protection to
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
+__global__ void renderCircles(short* cudaDeviceBoxes, int i) {
+
+
 __global__ void computeBoundingBoxes(int* cudaDeviceStatus, short* cudaDeviceBoxes) {
     // __shared__ int current_cir[cuConstRendererParams.numCircles];
     // int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -462,26 +465,6 @@ __global__ void computeBoundingBoxes(int* cudaDeviceStatus, short* cudaDeviceBox
     cudaDeviceBoxes[index * 4 + 1] = screenMaxX;
     cudaDeviceBoxes[index * 4 + 2] = screenMinY;
     cudaDeviceBoxes[index * 4 + 3] = screenMaxY;
-
-    // float invWidth = 1.f / imageWidth;
-    // float invHeight = 1.f / imageHeight;
-
-    // // for all pixels in the bonding box
-    // dim3 blockDim(16, 16);
-    // dim3 gridDim((screenMaxX - screenMinX + blockDim.x - 1) / blockDim.x, screenMaxY - screenMinY + blockDim.y - 1 / blockDim.y);
-
-    // cudaShadePixel<<<gridDim, blockDim>>>(index, screenMinY, screenMaxY, screenMinX, screenMaxX, invWidth, invHeight, imageWidth, imageHeight);
-
-    // for (int pixelY=screenMinY; pixelY<screenMaxY; pixelY++) {
-    //     float4* imgPtr = (float4*)(&cuConstRendererParams.imageData[4 * (pixelY * imageWidth + screenMinX)]);
-    //     for (int pixelX=screenMinX; pixelX<screenMaxX; pixelX++) {
-    //         float2 pixelCenterNorm = make_float2(invWidth * (static_cast<float>(pixelX) + 0.5f),
-    //                                              invHeight * (static_cast<float>(pixelY) + 0.5f));
-    //         shadePixel(index, pixelCenterNorm, p, imgPtr);
-    //         imgPtr++;
-    //     }
-    // }
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////
@@ -803,15 +786,15 @@ CudaRenderer::render() {
             int circNum = updateList[2+i];
             // bound boxes already clamped
             gridDim = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
-            renderCircles<<<gridDim, blockDim>>>(cudaDeviceBoxes, i);
+            float invWidth = 1.f / imageWidth;
+            float invHeight = 1.f / imageHeight;
+            cudaShadePixel<<<gridDim, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, cuConstRendererParams.imageWidth, cuConstRendererParams.imageHeight, cudaDeviceStatusMat);
         }
         // where each block will take one circle. this makes it easier to
         // delegate work and we can basically reuse the original
         // kernelRenderCircles code
         cudaCheckError(cudaDeviceSynchronize());
         // update deps
-
-
 
 
         // for (int i =0; i < numCircles; i++) {
