@@ -24,6 +24,8 @@ private:
     int width;
     int height;
     short* boxes;
+    int numUpdatesLeft;
+
 
     float* cudaDevicePosition;
     float* cudaDeviceVelocity;
@@ -33,6 +35,8 @@ private:
     int* cudaDeviceStatus;
     short* cudaDeviceBoxes;
     short* cudaDeviceStatusMat;
+    int *cudaUpdateList;
+    int cudaNumUpdatesLeft;
 
 public:
 

@@ -404,17 +404,17 @@ shadePixel(int circleIndex, float2 pixelCenter, float3 p, float4* imagePtr) {
 
 __global__ void
 cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invHeight,short imageWidth, short imageHeight, short* cudaDeviceStatusMat) {
-    int screenMinX = cudaDeviceBoxes[circleIndex * 4];
-    int screenMaxX = cudaDeviceBoxes[circleIndex * 4 + 1];
-    int screenMinY = cudaDeviceBoxes[circleIndex * 4 + 2];
-    int screenMaxY = cudaDeviceBoxes[circleIndex * 4 + 3];
     int index_x = blockIdx.x * blockDim.x + threadIdx.x;
     int index_y = blockIdx.y * blockDim.y + threadIdx.y;
-
     if (index_x + screenMinX >= screenMaxX)
         return;
     if (index_y + screenMinY >= screenMaxY)
         return;
+
+    int screenMinX = cudaDeviceBoxes[circleIndex * 4];
+    int screenMaxX = cudaDeviceBoxes[circleIndex * 4 + 1];
+    int screenMinY = cudaDeviceBoxes[circleIndex * 4 + 2];
+    int screenMaxY = cudaDeviceBoxes[circleIndex * 4 + 3];
 
     float2 pixelCenter;
     pixelCenter = make_float2(invWidth * (static_cast<float>(screenMinX+index_x) + 0.5f),
@@ -429,10 +429,10 @@ cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invH
 // Each thread renders a circle.  Since there is no protection to
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
-__global__ void kernelRenderCircles(int* cudaDeviceStatus, int i, short* cudaDeviceBoxes) {
+__global__ void computeBoundingBoxes(int* cudaDeviceStatus, short* cudaDeviceBoxes) {
     // __shared__ int current_cir[cuConstRendererParams.numCircles];
     // int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int index = i;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (index >= cuConstRendererParams.numCircles)
         return;
@@ -758,11 +758,8 @@ CudaRenderer::render() {
     clearStatusMat<<<gridDim2d, blockDim2d>>>(cudaDeviceStatusMat, numCircles);
     cudaCheckError(cudaDeviceSynchronize());
 
-    for (int i =0; i < numCircles; i++) {
-        // parallelized 
-        kernelRenderCircles<<<1, 1>>>(cudaDeviceStatus, i, cudaDeviceBoxes);
-        //
-    }
+    // cudaDeviceStatus isn't being used for this function? can we remove that and the above sync
+    computeBoundingBoxes<<<1, numCircles>>>(cudaDeviceStatus, cudaDeviceBoxes);
     cudaCheckError(cudaDeviceSynchronize());
 
     float invWidth = 1.f / width;
