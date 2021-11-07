@@ -766,6 +766,7 @@ CudaRenderer::render() {
     float invHeight = 1.f / height;
     boxes = new short[4 * numCircles];
 
+    //may not need this call
     cudaMemcpy(boxes, cudaDeviceBoxes, sizeof(short) * 4 * numCircles, cudaMemcpyDeviceToHost);
 
     // bulk launch N-1 times, with length (1, 2, ..., N-1) number of threads 
@@ -782,8 +783,16 @@ CudaRenderer::render() {
         //iterate once
         // update num circ
     //}
-    int needtoShade = numCircles;
-    while (needtoShade) {
+    numUpdatesLeft = numCircles;
+    // cudaUpdateList[0] is the number of nodes left to render and
+    // cudaUpdateList[1] is the number of nodes we need to update (so length of
+    // the rest of the vector)
+    cudaMalloc(&cudaUpdateList, (numCircles + 2) * sizeof(int));
+    
+    int updates[2] = {numCircles, 0};
+    cudaMemcpy(&cudaUpdateList, updates, 2 * sizeof(int), cudaMemcpyHostToDevice);
+
+    while (numUpdatesLeft) {
         // here do one iteration
         // cudasync
         // update deps
