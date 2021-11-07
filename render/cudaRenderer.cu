@@ -406,15 +406,16 @@ __global__ void
 cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invHeight,short imageWidth, short imageHeight, short* cudaDeviceStatusMat) {
     int index_x = blockIdx.x * blockDim.x + threadIdx.x;
     int index_y = blockIdx.y * blockDim.y + threadIdx.y;
-    if (index_x + screenMinX >= screenMaxX)
-        return;
-    if (index_y + screenMinY >= screenMaxY)
-        return;
 
     int screenMinX = cudaDeviceBoxes[circleIndex * 4];
     int screenMaxX = cudaDeviceBoxes[circleIndex * 4 + 1];
     int screenMinY = cudaDeviceBoxes[circleIndex * 4 + 2];
     int screenMaxY = cudaDeviceBoxes[circleIndex * 4 + 3];
+
+    if (index_x + screenMinX >= screenMaxX)
+        return;
+    if (index_y + screenMinY >= screenMaxY)
+        return;
 
     float2 pixelCenter;
     pixelCenter = make_float2(invWidth * (static_cast<float>(screenMinX+index_x) + 0.5f),
@@ -430,6 +431,7 @@ cudaShadePixel(int circleIndex, short* cudaDeviceBoxes,float invWidth,float invH
 // ensure order of update or mutual exclusion on the output image, the
 // resulting image will be incorrect.
 __global__ void renderCircles(short* cudaDeviceBoxes, int i) {
+}
 
 
 __global__ void computeBoundingBoxes(int* cudaDeviceStatus, short* cudaDeviceBoxes) {
@@ -720,11 +722,12 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     cudaDeviceStatusMat[i*numCircles] += overlapped;
 }
 
-update_deps {
-    does the vector sums
-    memcopies into a new matrix to do scan
-    puts indices of to be drawn into some vector
-}
+// update_deps {
+//     does the vector sums
+//     memcopies into a new matrix to do scan
+//     puts indices of to be drawn into some vector
+// }
+
 void
 CudaRenderer::render() {
 
@@ -781,14 +784,12 @@ CudaRenderer::render() {
 
     while (updateList[0]) {
         // here do one iteration by rendering every circle we can i.e.
-        cudaMemcpy(updates, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(updateList, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
         for (int i = 0; i < updateList[1]; i++) {
             int circNum = updateList[2+i];
             // bound boxes already clamped
             gridDim = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
-            float invWidth = 1.f / imageWidth;
-            float invHeight = 1.f / imageHeight;
-            cudaShadePixel<<<gridDim, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, cuConstRendererParams.imageWidth, cuConstRendererParams.imageHeight, cudaDeviceStatusMat);
+            cudaShadePixel<<<gridDim, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
         }
         // where each block will take one circle. this makes it easier to
         // delegate work and we can basically reuse the original
