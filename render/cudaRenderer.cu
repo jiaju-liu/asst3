@@ -783,36 +783,42 @@ CudaRenderer::render() {
         //iterate once
         // update num circ
     //}
-    numUpdatesLeft = numCircles;
     // cudaUpdateList[0] is the number of nodes left to render and
     // cudaUpdateList[1] is the number of nodes we need to update (so length of
     // the rest of the vector)
     cudaMalloc(&cudaUpdateList, (numCircles + 2) * sizeof(int));
     
     int updates[2] = {numCircles, 0};
-    cudaMemcpy(&cudaUpdateList, updates, 2 * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(cudaUpdateList, updates, 2 * sizeof(int), cudaMemcpyHostToDevice);
 
-    while (numUpdatesLeft) {
-        // here do one iteration
-        // cudasync
-        // update deps
-        for (int i =0; i < numCircles; i++) {
-            // see if it's available
-            // change code
-            // add a drawn vector
-            if (!cudaDeviceStatusMat[i*numCircles]) {
-                dim3 blockDim2(16, 16);
-                int circleIndex = i;
-                int screenMinX = boxes[circleIndex * 4];
-                int screenMaxX = boxes[circleIndex * 4 + 1];
-                int screenMinY = boxes[circleIndex * 4 + 2];
-                int screenMaxY = boxes[circleIndex * 4 + 3];
-                dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
-                cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
-                // update deps
-            }
-        }
+    // do an inital updatedeps to populate cudaUpdateList? or throw it in checkoverlap
+    while (updates[0]) {
+        // here do one iteration by rendering every circle we can i.e.
+        // cudaMemcpy(updates, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
+        // renderCircles<<<updates[1], someBlocksize>>> renderCircles
+        // where each block will take one circle. this makes it easier to delegate work
         cudaCheckError(cudaDeviceSynchronize());
+        // update deps
+
+
+
+
+        // for (int i =0; i < numCircles; i++) {
+        //     // see if it's available
+        //     // change code
+        //     // add a drawn vector
+        //     if (!cudaDeviceStatusMat[i*numCircles]) {
+        //         dim3 blockDim2(16, 16);
+        //         int circleIndex = i;
+        //         int screenMinX = boxes[circleIndex * 4];
+        //         int screenMaxX = boxes[circleIndex * 4 + 1];
+        //         int screenMinY = boxes[circleIndex * 4 + 2];
+        //         int screenMaxY = boxes[circleIndex * 4 + 3];
+        //         dim3 gridDim2((screenMaxX - screenMinX + blockDim2.x - 1) / blockDim2.x, screenMaxY - screenMinY + blockDim2.y - 1 / blockDim2.y);
+        //         cudaShadePixel<<<gridDim2, blockDim2>>>(i, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
+        //         // update deps
+        //     }
+        // }
     }
 
 }
