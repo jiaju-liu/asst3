@@ -809,6 +809,8 @@ CudaRenderer::render() {
         // rn just subtract each individually. next try reduce/scan by key
         updateDeps<<<gridDim,blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
         cudaCheckError(cudaDeviceSynchronize());
+        // now need to set drawn circles to -1 and do a scan (or scatter?) to
+        // put new 0's into the updatelist
 
         // update deps
 
