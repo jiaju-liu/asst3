@@ -704,6 +704,21 @@ clearStatusMat(short* cudaDeviceStatusMat, int numCircles) {
 }
 
 __global__ void
+updateDeps(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    // only need compute for circles that havent been rendered
+    if (index < numCircles && cudaDeviceStatusMat[index * numCircles] > 0) {
+        int total = 0;
+        for (int i = 0; i < cudaUpdateList[1]; i++) {
+            // circle rendered was before this current one
+            if (cudaUpdateList[i+2] < index)
+                total += cudaDeviceStatusMat[index * numCircles + cudaUpdateList[i+2] + 1];
+        }
+        cudaDeviceStatusMat[index * numCircles] -= total;
+    }
+}
+
+__global__ void
 checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= i)
@@ -714,11 +729,11 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     float circleRadius = cudaDeviceRadius[i];
     float boxL = invWidth * cudaDeviceBoxes[index*4];
     float boxR = invWidth * cudaDeviceBoxes[index*4+1];
-    float boxB = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
-    float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
+    float boxT = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
+    float boxB = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
     short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
     cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
-    // num circles must be drawn 88before drawing this (-1 = already drawn)
+    // num circles must be drawn before drawing this (-1 = already drawn)
     cudaDeviceStatusMat[i*numCircles] += overlapped;
 }
 
@@ -788,13 +803,16 @@ CudaRenderer::render() {
         for (int i = 0; i < updateList[1]; i++) {
             int circNum = updateList[2+i];
             // bound boxes already clamped
-            gridDim = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
-            cudaShadePixel<<<gridDim, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
+            gridDim2d = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
+            cudaShadePixel<<<gridDim2d, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, cuConstRendererParams.imageWidth, cuConstRendererParams.imageHeight, cudaDeviceStatusMat);
         }
-        // where each block will take one circle. this makes it easier to
-        // delegate work and we can basically reuse the original
-        // kernelRenderCircles code
+        //pseudocode for updating
+        // rn just subtract each individually. next try reduce/scan by key
+        updateDeps<<<gridDim,blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
         cudaCheckError(cudaDeviceSynchronize());
+        // now need to set drawn circles to -1 and do a scan (or scatter?) to
+        // put new 0's into the updatelist
+
         // update deps
 
 
