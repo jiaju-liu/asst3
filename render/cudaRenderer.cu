@@ -718,6 +718,16 @@ updateDeps(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) {
     }
 }
 
+__global__ void newDeps
+set 
+__global__ void 
+setZeros(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) { 
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < cudaUpdateList[1]) {
+        cudaDeviceStatus[cudaUpdateList[index + 2] * numCircles] = -1;
+    }
+}
+
 __global__ void
 checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
@@ -808,9 +818,14 @@ CudaRenderer::render() {
         }
         //pseudocode for updating
         // rn just subtract each individually. next try reduce/scan by key
-        updateDeps<<<gridDim,blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
+        // TODO: set to -1 here
+        dim3 reducedGridDim((updateList[1] + blockDim.x - 1) / blockDim.x);
+        // set cicles we just rendered to -1 (only need updatelist[1] number of threads)
+        setZeros<<<reducedGridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
+        updateDeps<<<gridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
         cudaCheckError(cudaDeviceSynchronize());
-        // now need to set drawn circles to -1 and do a scan (or scatter?) to
+        // do a scatter to fill it out
+        // now need to do a scan (or scatter?) to
         // put new 0's into the updatelist
 
         // update deps
