@@ -17,6 +17,15 @@
 
 #include "circleBoxTest.cu_inl"
 
+#include <thrust/host_vector.h>
+#include <thrust/device_vector.h>
+#include <thrust/generate.h>
+#include <thrust/reduce.h>
+#include <thrust/functional.h>
+#include <thrust/sort.h>
+#include <thrust/copy.h>
+#include <algorithm>
+#include <cstdlib>
 
 
 #define DEBUG
@@ -739,6 +748,25 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     float circleRadius = cudaDeviceRadius[i];
     float boxL = invWidth * cudaDeviceBoxes[index*4];
     float boxR = invWidth * cudaDeviceBoxes[index*4+1];
+    float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
+    float boxB = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
+    short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
+    cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
+    // num circles must be drawn before drawing this (-1 = already drawn)
+    cudaDeviceStatusMat[i*numCircles] += overlapped;
+}
+
+__global__ void
+checkOverlap2(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= i)
+        return;
+    // printf("index: %d, i: %d\n", index, i);
+    float circleX = cudaDevicePosition[i*3];
+    float circleY = cudaDevicePosition[i*3+1];
+    float circleRadius = cudaDeviceRadius[i];
+    float boxL = invWidth * cudaDeviceBoxes[index*4];
+    float boxR = invWidth * cudaDeviceBoxes[index*4+1];
     float boxT = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
     float boxB = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
     short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
@@ -746,6 +774,7 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     // num circles must be drawn before drawing this (-1 = already drawn)
     cudaDeviceStatusMat[i*numCircles] += overlapped;
 }
+
 
 // update_deps {
 //     does the vector sums
@@ -800,7 +829,20 @@ CudaRenderer::render() {
     // initialize vals
     cudaMemcpy(cudaUpdateList, updateList, 2 * sizeof(int), cudaMemcpyHostToDevice);
 
+    for (int i =0; i < numCircles; i++) {
+        if (i == 0) continue; // circle 0 doesn't have any dependencies
+        checkOverlap2<<<(i+blockDim.x-1) / blockDim.x, blockDim>>>(cudaDeviceStatusMat, i, cudaDeviceBoxes, cudaDevicePosition, cudaDeviceRadius, numCircles, invWidth, invHeight);
+        // add prefix sum
+    }
+    cudaCheckError(cudaDeviceSynchronize());
+
     // do an inital updatedeps to populate cudaUpdateList? or throw it in checkoverlap
+    for (int i = 1; i < numCircles; i++) {
+        thrust::device_ptr<short> dev_ptr(&cudaDeviceStatusMat[i * numCircles]);
+        // int x = thrust::reduce(thrust::host, dev_ptr, dev_ptr + numCircles, 0);
+        int x = thrust::reduce(dev_ptr, dev_ptr + numCircles, 0, thrust::plus<short>());
+        printf("row : %d, sum: %d\n", i, x);
+    }
 
     // memcpy once to get array size
     cudaMemcpy(updateList, cudaUpdateList, 2 * sizeof(int), cudaMemcpyDeviceToHost);
@@ -814,7 +856,7 @@ CudaRenderer::render() {
             int circNum = updateList[2+i];
             // bound boxes already clamped
             gridDim2d = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
-            cudaShadePixel<<<gridDim2d, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, cuConstRendererParams.imageWidth, cuConstRendererParams.imageHeight, cudaDeviceStatusMat);
+            cudaShadePixel<<<gridDim2d, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
         }
         //pseudocode for updating
         // rn just subtract each individually. next try reduce/scan by key
