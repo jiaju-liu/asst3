@@ -718,13 +718,13 @@ updateDeps(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) {
     }
 }
 
-__global__ void newDeps
-set 
+// __global__ void newDeps
+// set 
 __global__ void 
 setZeros(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) { 
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index < cudaUpdateList[1]) {
-        cudaDeviceStatus[cudaUpdateList[index + 2] * numCircles] = -1;
+        cudaDeviceStatusMat[cudaUpdateList[index + 2] * numCircles] = -1;
     }
 }
 
