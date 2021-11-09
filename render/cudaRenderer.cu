@@ -586,7 +586,9 @@ CudaRenderer::setup() {
     cudaCheckError(cudaMalloc(&cudaDeviceBoxes, sizeof(short) * 4 * numCircles));
     cudaCheckError(cudaMalloc(&cudaDeviceStatusMat, sizeof(short) * numCircles * numCircles));
     cudaCheckError(cudaMalloc(&cudaDevicelaunchList, sizeof(short) * numCircles));
+    cudaCheckError(cudaMalloc(&cudaDevicelaunchList_scan, sizeof(short) * numCircles));
     cudaCheckError(cudaMalloc(&cudaDevicelaunchCircles, sizeof(short) * (numCircles + 1)));
+    cudaCheckError(cudaMalloc(&cudaDeviceUpdateStatus, sizeof(short) * numCircles * numCircles));
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
@@ -714,30 +716,28 @@ clearStatusMat(short* cudaDeviceStatusMat, int numCircles) {
     cudaDeviceStatusMat[index_x * numCircles + index_y] = 0;
 }
 
-__global__ void
-updateDeps(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    // only need compute for circles that havent been rendered
-    if (index < numCircles && cudaDeviceStatusMat[index * numCircles] > 0) {
-        int total = 0;
-        for (int i = 0; i < cudaUpdateList[1]; i++) {
-            // circle rendered was before this current one
-            if (cudaUpdateList[i+2] < index)
-                total += cudaDeviceStatusMat[index * numCircles + cudaUpdateList[i+2] + 1];
-        }
-        cudaDeviceStatusMat[index * numCircles] -= total;
-    }
-}
+// __global__ void
+// updateDeps(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) {
+//     int index = blockIdx.x * blockDim.x + threadIdx.x;
+//     // only need compute for circles that havent been rendered
+//     if (index < numCircles && cudaDeviceStatusMat[index * numCircles] > 0) {
+//         int total = 0;
+//         for (int i = 0; i < cudaUpdateList[1]; i++) {
+//             // circle rendered was before this current one
+//             if (cudaUpdateList[i+2] < index)
+//                 total += cudaDeviceStatusMat[index * numCircles + cudaUpdateList[i+2] + 1];
+//         }
+//         cudaDeviceStatusMat[index * numCircles] -= total;
+//     }
+// }
 
-// __global__ void newDeps
-// set 
-__global__ void 
-setZeros(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) { 
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index < cudaUpdateList[1]) {
-        cudaDeviceStatusMat[cudaUpdateList[index + 2] * numCircles] = -1;
-    }
-}
+// __global__ void 
+// setZeros(int* cudaUpdateList, short* cudaDeviceStatusMat, int numCircles) { 
+//     int index = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (index < cudaUpdateList[1]) {
+//         cudaDeviceStatusMat[cudaUpdateList[index + 2] * numCircles] = -1;
+//     }
+// }
 
 __global__ void
 checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
@@ -790,7 +790,7 @@ scatter(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircl
 }
 
 __global__ void
-checker(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircles, int* cudaUpdateList) {
+checker(int numCircles) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= numCircles)
         return;
@@ -801,6 +801,16 @@ checker(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircl
 //     memcopies into a new matrix to do scan
 //     puts indices of to be drawn into some vector
 // }
+
+
+__global__ void
+updateDeps(short* cudaDeviceUpdateStatus, short* cudaDeviceStatusMat, int i, short* cudaDevicelaunchCircles, int numCircles) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numCircles)
+        return;
+    if (cudaDeviceStatusMat[index * numCircles + cudaDevicelaunchCircles[i]] == 1)
+        cudaDeviceUpdateStatus[index * numCircles + i] = 1;
+}
 
 void
 CudaRenderer::render() {
@@ -818,6 +828,7 @@ CudaRenderer::render() {
     dim3 gridDim2d((numCircles + blockDim2d.x - 1) / blockDim2d.x, (numCircles + blockDim2d.y - 1) / blockDim2d.y );
 
     clearStatusMat<<<gridDim2d, blockDim2d>>>(cudaDeviceStatusMat, numCircles);
+    clearStatusMat<<<gridDim2d, blockDim2d>>>(cudaDeviceUpdateStatus, numCircles);
     cudaCheckError(cudaDeviceSynchronize());
 
     // cudaDeviceStatus isn't being used for this function? can we remove that and the above sync
@@ -863,11 +874,9 @@ CudaRenderer::render() {
     cudaCheckError(cudaDeviceSynchronize());
 
     thrust::device_ptr<short> dev_ptr_launch_list(cudaDevicelaunchList);
-    thrust::inclusive_scan(dev_ptr_launch_list, dev_ptr_launch_list + numCircles, dev_ptr_launch_list);
-    scatter<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
-    cudaCheckError(cudaDeviceSynchronize());
-
-    checker<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
+    thrust::device_ptr<short> dev_ptr_launch_list_scan(cudaDevicelaunchList_scan);
+    thrust::inclusive_scan(dev_ptr_launch_list, dev_ptr_launch_list + numCircles, cudaDevicelaunchList_scan);
+    scatter<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list_scan), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
     cudaCheckError(cudaDeviceSynchronize());
 
     cudaMemcpy(&num_circle_to_launch, cudaDevicelaunchCircles + numCircles, sizeof(short), cudaMemcpyDeviceToHost);
@@ -893,9 +902,25 @@ CudaRenderer::render() {
         // TODO: set to -1 here
         dim3 reducedGridDim((updateList[1] + blockDim.x - 1) / blockDim.x);
         // set cicles we just rendered to -1 (only need updatelist[1] number of threads)
-        setZeros<<<reducedGridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
-        updateDeps<<<gridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
+        // setZeros<<<reducedGridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
+        // updateDeps<<<gridDim, blockDim>>>(cudaUpdateList, cudaDeviceStatusMat, numCircles);
+
+        // for (int i = 0; i < num_circle_to_launch; i++) {
+        //     cudaMemcpyAsync();
+        // }
+
+        for (int i = 0; i < num_circle_to_launch; i++) {
+            updateDeps<<<gridDim, blockDim>>>(cudaDeviceUpdateStatus, cudaDeviceStatusMat, i, cudaDevicelaunchCircles, numCircles);
+        }
+        
         cudaCheckError(cudaDeviceSynchronize());
+
+        for (int i = 0; i < numCircles; i++) {
+            thrust::device_ptr<short> dev_ptr(&cudaDeviceStatusMat[i * numCircles]);
+            int x = thrust::reduce(dev_ptr, dev_ptr + num_circle_to_launch, 0, thrust::plus<short>());
+            updateList[2 + i] -= x;
+        }
+        
         // do a scatter to fill it out
         // now need to do a scan (or scatter?) to
         // put new 0's into the updatelist
