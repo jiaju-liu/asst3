@@ -585,6 +585,8 @@ CudaRenderer::setup() {
     cudaCheckError(cudaMalloc(&cudaDeviceStatus, sizeof(int) * numCircles));
     cudaCheckError(cudaMalloc(&cudaDeviceBoxes, sizeof(short) * 4 * numCircles));
     cudaCheckError(cudaMalloc(&cudaDeviceStatusMat, sizeof(short) * numCircles * numCircles));
+    cudaCheckError(cudaMalloc(&cudaDevicelaunchList, sizeof(short) * numCircles));
+    cudaCheckError(cudaMalloc(&cudaDevicelaunchCircles, sizeof(short) * (numCircles + 1)));
 
     cudaMemcpy(cudaDevicePosition, position, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
     cudaMemcpy(cudaDeviceVelocity, velocity, sizeof(float) * 3 * numCircles, cudaMemcpyHostToDevice);
@@ -748,33 +750,51 @@ checkOverlap(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* c
     float circleRadius = cudaDeviceRadius[i];
     float boxL = invWidth * cudaDeviceBoxes[index*4];
     float boxR = invWidth * cudaDeviceBoxes[index*4+1];
-    float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
-    float boxB = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
+    float boxB = invHeight * cudaDeviceBoxes[index*4+2]; // right now is the right position
+    float boxT = invHeight * cudaDeviceBoxes[index*4+3]; // right now is the right position
     short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
-    cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
-    // num circles must be drawn before drawing this (-1 = already drawn)
-    cudaDeviceStatusMat[i*numCircles] += overlapped;
+    cudaDeviceStatusMat[i*numCircles + index] = overlapped;
+}
+
+// cudaUpdateList contains number of circles that is pending to be drawn for any circle
+// cudaDevicelaunchList is a one hot vector to denote which circle can be launched, i.e. 0 circle pending
+__global__ void
+calculate_ready_to_launch(int* cudaUpdateList, short* cudaDevicelaunchList, int numCircles) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numCircles)
+        return;
+    if (cudaUpdateList[2 + index] == 0) {
+        cudaDevicelaunchList[index] = 1;
+    } else {
+        cudaDevicelaunchList[index] = 0;
+    }
+}
+
+
+// dev_ptr_launch_list is the prefix sum version of cudaDevicelaunchList
+// scatter the indices of those circles that can be drawn into cudaDevicelaunchCircles
+// suppose cudaUpdateList has put -1 into circles that have become irrelavant, *** may not need this actually ***
+__global__ void
+scatter(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircles, int* cudaUpdateList) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index >= numCircles)
+        return;
+    if (index==0 && dev_ptr_launch_list[index]==1){
+        cudaDevicelaunchCircles[index] = index;
+    } else {
+        if (dev_ptr_launch_list[index] != dev_ptr_launch_list[index-1])
+            cudaDevicelaunchCircles[index-1] = index;
+        if (index==numCircles-1)
+            cudaDevicelaunchCircles[numCircles] = dev_ptr_launch_list[index];
+    }
 }
 
 __global__ void
-checkOverlap2(short* cudaDeviceStatusMat, int i, short* cudaDeviceBoxes, float* cudaDevicePosition, float* cudaDeviceRadius, int numCircles, float invWidth,float invHeight) {
+checker(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircles, int* cudaUpdateList) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
-    if (index >= i)
+    if (index >= numCircles)
         return;
-    // printf("index: %d, i: %d\n", index, i);
-    float circleX = cudaDevicePosition[i*3];
-    float circleY = cudaDevicePosition[i*3+1];
-    float circleRadius = cudaDeviceRadius[i];
-    float boxL = invWidth * cudaDeviceBoxes[index*4];
-    float boxR = invWidth * cudaDeviceBoxes[index*4+1];
-    float boxT = invHeight * cudaDeviceBoxes[index*4+2]; // maybe need to switch position
-    float boxB = invHeight * cudaDeviceBoxes[index*4+3]; // maybe need to switch position
-    short overlapped = circleInBoxConservative(circleX, circleY, circleRadius, boxL, boxR, boxT, boxB);
-    cudaDeviceStatusMat[i*numCircles + index + 1] = overlapped;
-    // num circles must be drawn before drawing this (-1 = already drawn)
-    cudaDeviceStatusMat[i*numCircles] += overlapped;
 }
-
 
 // update_deps {
 //     does the vector sums
@@ -824,30 +844,35 @@ CudaRenderer::render() {
     cudaMalloc(&cudaUpdateList, (numCircles + 2) * sizeof(int));
     
     int updateList[2 + numCircles];
+    std::memset(updateList, 0, sizeof(int) * (2+numCircles));
     updateList[0] = numCircles;
-    updateList[1] = 0;
     // initialize vals
-    cudaMemcpy(cudaUpdateList, updateList, 2 * sizeof(int), cudaMemcpyHostToDevice);
-
-    for (int i =0; i < numCircles; i++) {
-        if (i == 0) continue; // circle 0 doesn't have any dependencies
-        checkOverlap2<<<(i+blockDim.x-1) / blockDim.x, blockDim>>>(cudaDeviceStatusMat, i, cudaDeviceBoxes, cudaDevicePosition, cudaDeviceRadius, numCircles, invWidth, invHeight);
-        // add prefix sum
-    }
-    cudaCheckError(cudaDeviceSynchronize());
 
     // do an inital updatedeps to populate cudaUpdateList? or throw it in checkoverlap
     for (int i = 1; i < numCircles; i++) {
         thrust::device_ptr<short> dev_ptr(&cudaDeviceStatusMat[i * numCircles]);
-        // int x = thrust::reduce(thrust::host, dev_ptr, dev_ptr + numCircles, 0);
         int x = thrust::reduce(dev_ptr, dev_ptr + numCircles, 0, thrust::plus<short>());
-        printf("row : %d, sum: %d\n", i, x);
+        // printf("row : %d, sum: %d\n", i, x);
+        updateList[2 + i] = x;
     }
+    cudaMemcpy(cudaUpdateList, updateList, (2+numCircles) * sizeof(int), cudaMemcpyHostToDevice);
+
+    calculate_ready_to_launch<<<gridDim, blockDim>>>(cudaUpdateList, cudaDevicelaunchList, numCircles);
+    cudaCheckError(cudaDeviceSynchronize());
+
+    thrust::device_ptr<short> dev_ptr_launch_list(cudaDevicelaunchList);
+    thrust::inclusive_scan(dev_ptr_launch_list, dev_ptr_launch_list + numCircles, dev_ptr_launch_list);
+    scatter<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
+    cudaCheckError(cudaDeviceSynchronize());
+
+    checker<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
+    cudaCheckError(cudaDeviceSynchronize());
 
     // memcpy once to get array size
     cudaMemcpy(updateList, cudaUpdateList, 2 * sizeof(int), cudaMemcpyDeviceToHost);
     // memcpy rest of it
     cudaMemcpy(updateList+2, cudaUpdateList+2, updateList[1] * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaCheckError(cudaDeviceSynchronize());
 
     while (updateList[0]) {
         // here do one iteration by rendering every circle we can i.e.

@@ -35,6 +35,8 @@ private:
     short* cudaDeviceBoxes;
     short* cudaDeviceStatusMat;
     int *cudaUpdateList;
+    short* cudaDevicelaunchList;
+    short* cudaDevicelaunchCircles;
 
 public:
 
