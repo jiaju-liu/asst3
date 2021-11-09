@@ -833,8 +833,9 @@ CudaRenderer::render() {
     cudaCheckError(cudaDeviceSynchronize());
 
     // cudaDeviceStatus isn't being used for this function? can we remove that and the above sync
-    computeBoundingBoxes<<<1, numCircles>>>(cudaDeviceStatus, cudaDeviceBoxes);
+    computeBoundingBoxes<<<gridDim, blockDim>>>(cudaDeviceStatus, cudaDeviceBoxes);
     cudaCheckError(cudaDeviceSynchronize());
+    cudaDeviceSynchronize();
 
     float invWidth = 1.f / width;
     float invHeight = 1.f / height;
@@ -870,7 +871,7 @@ CudaRenderer::render() {
         updateList[2 + i] = x;
     }
 
-    while (updateList[0]) {
+    while (updateList[0] > 0) {
 
         cudaMemcpy(cudaUpdateList, updateList, (2+numCircles) * sizeof(int), cudaMemcpyHostToDevice);
 
@@ -879,7 +880,7 @@ CudaRenderer::render() {
 
         thrust::device_ptr<short> dev_ptr_launch_list(cudaDevicelaunchList);
         thrust::device_ptr<short> dev_ptr_launch_list_scan(cudaDevicelaunchList_scan);
-        thrust::inclusive_scan(dev_ptr_launch_list, dev_ptr_launch_list + numCircles, cudaDevicelaunchList_scan);
+        thrust::inclusive_scan(dev_ptr_launch_list, dev_ptr_launch_list + numCircles, dev_ptr_launch_list_scan);
         scatter<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list_scan), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
         cudaCheckError(cudaDeviceSynchronize());
 
