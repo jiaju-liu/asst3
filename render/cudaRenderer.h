@@ -24,7 +24,8 @@ private:
     int width;
     int height;
     short* boxes;
-
+    short num_circle_to_launch;
+    short* launchCircles;
 
     float* cudaDevicePosition;
     float* cudaDeviceVelocity;

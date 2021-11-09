@@ -805,6 +805,8 @@ checker(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircl
 void
 CudaRenderer::render() {
 
+    short launchCircles[numCircles];
+
     // 256 threads per block is a healthy number
     dim3 blockDim(256, 1);
     dim3 gridDim((numCircles + blockDim.x - 1) / blockDim.x);
@@ -868,21 +870,24 @@ CudaRenderer::render() {
     checker<<<gridDim, blockDim>>>(thrust::raw_pointer_cast(dev_ptr_launch_list), cudaDevicelaunchCircles, numCircles, cudaUpdateList);
     cudaCheckError(cudaDeviceSynchronize());
 
-    // memcpy once to get array size
-    cudaMemcpy(updateList, cudaUpdateList, 2 * sizeof(int), cudaMemcpyDeviceToHost);
-    // memcpy rest of it
-    cudaMemcpy(updateList+2, cudaUpdateList+2, updateList[1] * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&num_circle_to_launch, cudaDevicelaunchCircles + numCircles, sizeof(short), cudaMemcpyDeviceToHost);
+    // updateList[0] -= num_circle_to_launch;
+    // updateList[1] += num_circle_to_launch;
+
     cudaCheckError(cudaDeviceSynchronize());
 
     while (updateList[0]) {
         // here do one iteration by rendering every circle we can i.e.
-        cudaMemcpy(updateList, cudaUpdateList, 2*sizeof(int), cudaMemcpyDeviceToHost);
-        for (int i = 0; i < updateList[1]; i++) {
-            int circNum = updateList[2+i];
+        cudaMemcpy(launchCircles, cudaDevicelaunchCircles, num_circle_to_launch*sizeof(short), cudaMemcpyDeviceToHost);
+        cudaCheckError(cudaDeviceSynchronize());
+        for (int i = 0; i < num_circle_to_launch; i++) {
+            int circNum = launchCircles[i];
             // bound boxes already clamped
             gridDim2d = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
-            cudaShadePixel<<<gridDim2d, blockDim>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
+            cudaShadePixel<<<gridDim2d, blockDim2d>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
         }
+        cudaCheckError(cudaDeviceSynchronize());
+
         //pseudocode for updating
         // rn just subtract each individually. next try reduce/scan by key
         // TODO: set to -1 here
