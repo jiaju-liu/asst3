@@ -779,11 +779,12 @@ scatter(short* dev_ptr_launch_list, short* cudaDevicelaunchCircles, int numCircl
     int index = blockIdx.x * blockDim.x + threadIdx.x;
     if (index >= numCircles)
         return;
-    if (index==0 && dev_ptr_launch_list[index]==1){
-        cudaDevicelaunchCircles[index] = index;
+    if (index==0){
+        if (dev_ptr_launch_list[index]==1)
+            cudaDevicelaunchCircles[index] = index;
     } else {
         if (dev_ptr_launch_list[index] != dev_ptr_launch_list[index-1])
-            cudaDevicelaunchCircles[index-1] = index;
+            cudaDevicelaunchCircles[dev_ptr_launch_list[index]-1] = index;
         if (index==numCircles-1)
             cudaDevicelaunchCircles[numCircles] = dev_ptr_launch_list[index];
     }
@@ -895,7 +896,13 @@ CudaRenderer::render() {
         for (int i = 0; i < num_circle_to_launch; i++) {
             int circNum = launchCircles[i];
             // bound boxes already clamped
-            gridDim2d = dim3((boxes[circNum+1] - boxes[circNum] + blockDim2d.x - 1) / blockDim2d.x, (boxes[circNum+3] - boxes[circNum+2] + blockDim2d.y - 1) / blockDim2d.y);
+
+            int screenMinX = boxes[circNum * 4];
+            int screenMaxX = boxes[circNum * 4 + 1];
+            int screenMinY = boxes[circNum * 4 + 2];
+            int screenMaxY = boxes[circNum * 4 + 3];
+            dim3 gridDim2d((screenMaxX - screenMinX + blockDim2d.x - 1) / blockDim2d.x, screenMaxY - screenMinY + blockDim2d.y - 1 / blockDim2d.y);
+
             cudaShadePixel<<<gridDim2d, blockDim2d>>>(circNum, cudaDeviceBoxes, invWidth, invHeight, width, height, cudaDeviceStatusMat);
         }
         cudaCheckError(cudaDeviceSynchronize());
@@ -914,6 +921,7 @@ CudaRenderer::render() {
 
         for (int i = 0; i < num_circle_to_launch; i++) {
             updateDeps<<<gridDim, blockDim>>>(cudaDeviceUpdateStatus, cudaDeviceStatusMat, i, cudaDevicelaunchCircles, numCircles);
+            updateList[2 + i] = -1;
         }
         
         cudaCheckError(cudaDeviceSynchronize());
